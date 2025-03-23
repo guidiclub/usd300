@@ -1,0 +1,192 @@
+{
+  "en": {
+    "start": {
+      "welcome": "Welcome! Please select your preferred language.",
+      "language_selected": "You selected English.",
+      "currency_selected": "You selected USD 🇺🇸."
+    },
+    "profile": {
+      "title": "👤 User Profile",
+      "id": "🆔 ID:",
+      "sold_accounts": "🏆 Sold accounts:",
+      "earned": "💸 Earned:",
+      "balance": "💰 Balance:",
+      "subscription": "👑 Subscription:",
+      "expiry": "📅 Expires:",
+      "registered": "📅 Registered:",
+      "active": "Active",
+      "inactive": "Inactive",
+      "no_data": "No data"
+    },
+    "support": {
+      "message": "📩 Official support: [contact](https://t.me/Blitzkrieg_sup)"
+    },
+    "api": {
+      "message": "🔌 API documentation is available on the website."
+    },
+    "partnership": {
+      "message": "🤝 Partnership information is available on the website."
+    },
+    "terms": {
+      "message": "📖 Terms of service: [read](https://teletype.in/@cjsdkncvkjdsnkvcds/4O_vM0eBTAK)."
+    },
+    "reviews": {
+      "message": "💞 Leave a review: [forum](https://lolz.live/threads/7661091/)."
+    },
+    "prices": {
+      "title": "📈 Prices",
+      "category": "📌 Category:",
+      "region": "🌍 Region:",
+      "country": "├─ {flag} {name} {phone_code} • {price}₽",
+      "no_prices": "Prices for the selected category were not found."
+    },
+    "admin": {
+      "panel": "Admin Panel",
+      "change_balance": "Enter user ID and amount separated by space (e.g., `123456789 1000`):",
+      "balance_updated": "Balance for user {user_id} updated to {amount}.",
+      "invalid_input": "Invalid input. Use the format: `user_id amount`.",
+      "activate_subscription": "Enter user ID to activate subscription:",
+      "subscription_activated": "Subscription for user {user_id} activated.",
+      "deactivate_subscription": "Enter user ID to deactivate subscription:",
+      "subscription_deactivated": "Subscription for user {user_id} deactivated.",
+      "change_prices": "Enter country code and new prices separated by space (e.g., `RU 70 45`):",
+      "prices_updated": "Prices for country {country_code} updated: {price_with_delay}₽ with delay, {price_without_delay}₽ without delay.",
+      "invalid_price_input": "Invalid input. Use the format: `country_code price_with_delay price_without_delay`."
+    },
+    "errors": {
+      "not_found": "User not found.",
+      "invalid_file": "Unsupported file format or file size exceeds 20 MB.",
+      "archive_error": "Error processing archive: {error}",
+      "session_error": "Error checking session: {error}"
+    },
+    "buttons": {
+      "sell_accounts": "🛒 Sell Accounts",
+      "profile": "💼 Profile",
+      "prices": "📈 Prices",
+      "support": "💬 Support",
+      "api": "🔌 API",
+      "partnership": "🤝 Partnership",
+      "terms": "📖 Terms of Service",
+      "reviews": "💞 Reviews",
+      "back_to_main_menu": "🔙 Back to Main Menu"
+    },
+    "file_handling": {
+      "file_accepted": "✅ File accepted. Extension: {extension}",
+      "file_saved": "📥 File saved: {file_name}",
+      "archive_extracted": "📦 Archive successfully extracted.",
+      "archive_processing": "✅ Archive successfully processed. Starting account check...",
+      "archive_missing_files": "❌ The archive is missing required files (SESSION + JSON).",
+      "multi_volume_archive": "❌ Multi-volume archives are not supported.",
+      "password_protected_archive": "❌ The archive is password protected. Please upload an archive without a password."
+    },
+    "subscription": {
+      "activated": "Your subscription has been activated for 30 days.",
+      "deactivated": "Your subscription has been deactivated.",
+      "active": "Your subscription is active. Expires: {expiry_date}",
+      "inactive": "Your subscription is inactive."
+    },
+    "settings": {
+      "title": "⚙️ Settings",
+      "notifications": "🔔 Notifications",
+      "purchase_mode": "🛒 Purchase Mode",
+      "language": "🌐 Language",
+      "currency": "💱 Currency",
+      "back_to_profile": "🔙 Back to Profile"
+    }
+  },
+  "ru": {
+    "start": {
+      "welcome": "Пожалуйста, выберите язык.",
+      "language_selected": "Вы выбрали русский язык.",
+      "currency_selected": "Вы выбрали рубли 🇷🇺."
+    },
+    "profile": {
+      "title": "👤 Профиль пользователя",
+      "id": "🆔 ID:",
+      "sold_accounts": "🏆 Продано аккаунтов:",
+      "earned": "💸 Заработано:",
+      "balance": "💰 Баланс:",
+      "subscription": "👑 Подписка:",
+      "expiry": "📅 Истекает:",
+      "registered": "📅 Зарегистрирован:",
+      "active": "Активна",
+      "inactive": "Неактивна",
+      "no_data": "Нет данных"
+    },
+    "support": {
+      "message": "📩 Официальная поддержка: [связаться](https://t.me/Blitzkrieg_sup)"
+    },
+    "api": {
+      "message": "🔌 API документация доступна на сайте."
+    },
+    "partnership": {
+      "message": "🤝 Информация о сотрудничестве доступна на сайте."
+    },
+    "terms": {
+      "message": "📖 Условия работы: [прочитать](https://teletype.in/@cjsdkncvkjdsnkvcds/4O_vM0eBTAK)."
+    },
+    "reviews": {
+      "message": "💞 Оставьте отзыв: [форум](https://lolz.live/threads/7661091/)."
+    },
+    "prices": {
+      "title": "📈 Цены",
+      "category": "📌 Категория:",
+      "region": "🌍 Регион:",
+      "country": "├─ {flag} {name} {phone_code} • {price}₽",
+      "no_prices": "Цены для выбранной категории не найдены."
+    },
+    "admin": {
+      "panel": "Админ-панель",
+      "change_balance": "Введите ID пользователя и сумму через пробел (например, `123456789 1000`):",
+      "balance_updated": "Баланс пользователя {user_id} изменен на {amount}.",
+      "invalid_input": "Некорректный ввод. Используйте формат: `ID_пользователя сумма`.",
+      "activate_subscription": "Введите ID пользователя для активации подписки:",
+      "subscription_activated": "Подписка для пользователя {user_id} активирована.",
+      "deactivate_subscription": "Введите ID пользователя для деактивации подписки:",
+      "subscription_deactivated": "Подписка для пользователя {user_id} деактивирована.",
+      "change_prices": "Введите код страны и новые цены через пробел (например, `RU 70 45`):",
+      "prices_updated": "Цены для страны {country_code} обновлены: {price_with_delay}₽ с отлежкой, {price_without_delay}₽ без отлежки.",
+      "invalid_price_input": "Некорректный ввод. Используйте формат: `код_страны цена_с_отлежкой цена_без_отлежки`."
+    },
+    "errors": {
+      "not_found": "Пользователь не найден.",
+      "invalid_file": "Неподдерживаемый формат файла или размер файла превышает 20 МБ.",
+      "archive_error": "Ошибка при обработке архива: {error}",
+      "session_error": "Ошибка при проверке сессии: {error}"
+    },
+    "buttons": {
+      "sell_accounts": "🛒 Продать аккаунты",
+      "profile": "💼 Профиль",
+      "prices": "📈 Цены",
+      "support": "💬 Поддержка",
+      "api": "🔌 API",
+      "partnership": "🤝 Сотрудничество",
+      "terms": "📖 Условия работы",
+      "reviews": "💞 Отзывы",
+      "back_to_main_menu": "🔙 В главное меню"
+    },
+    "file_handling": {
+      "file_accepted": "✅ Файл принят. Расширение: {extension}",
+      "file_saved": "📥 Файл сохранён: {file_name}",
+      "archive_extracted": "📦 Архив успешно распакован.",
+      "archive_processing": "✅ Архив успешно обработан. Начинаю проверку аккаунтов...",
+      "archive_missing_files": "❌ В архиве отсутствуют необходимые файлы (SESSION + JSON).",
+      "multi_volume_archive": "❌ Многотомные архивы не поддерживаются.",
+      "password_protected_archive": "❌ Архив защищён паролем. Пожалуйста, загрузите архив без пароля."
+    },
+    "subscription": {
+      "activated": "Ваша подписка активирована на 30 дней.",
+      "deactivated": "Ваша подписка деактивирована.",
+      "active": "Ваша подписка активна. Истекает: {expiry_date}",
+      "inactive": "Ваша подписка неактивна."
+    },
+    "settings": {
+      "title": "⚙️ Настройки",
+      "notifications": "🔔 Уведомления",
+      "purchase_mode": "🛒 Режим покупки",
+      "language": "🌐 Язык",
+      "currency": "💱 Валюта",
+      "back_to_profile": "🔙 Назад в профиль"
+    }
+  }
+}
