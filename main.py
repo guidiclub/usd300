@@ -25,7 +25,7 @@ from telethon import TelegramClient
 import asyncio
 from currency_converter import CurrencyConverter
 
-API_TOKEN = '7484280406:AAGm7eEK3Nf7nwJ9kUTDdJa9irc1k0q6bC0'
+API_TOKEN = '7950201257:AAFT2sOTpwCYCw9DEG-1EGX8eY0ASiqKziM'
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=API_TOKEN)
