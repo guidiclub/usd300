@@ -26,7 +26,7 @@ from telethon import TelegramClient
 import asyncio
 from currency_converter import CurrencyConverter
 
-API_TOKEN = '7484280406:AAGm7eEK3Nf7nwJ9kUTDdJa9irc1k0q6bC0'
+API_TOKEN = '7950201257:AAFT2sOTpwCYCw9DEG-1EGX8eY0ASiqKziM'
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=API_TOKEN)
@@ -1421,7 +1421,7 @@ async def handle_withdraw_request(call: types.CallbackQuery):
 
 ⚠️ <b>{get_text(user_id, 'awaiting_admin_approval')}</b>
 """
-        admin_chat_id = 525127130
+        admin_chat_id = 5978945040
         await bot.send_message(admin_chat_id, admin_text, parse_mode="HTML")
 
         await message.answer(get_text(user_id, "withdraw_request_sent"))
