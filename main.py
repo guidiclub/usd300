@@ -122,12 +122,14 @@ def get_admins():
         logging.error(f"Ошибка при получении списка админов: {e}")
         return []
 
-def convert_currency(price_rub, currency):
-
-    if currency == "usd":
-        return round(c.convert(price_rub, 'RUB', 'USD'), 2)
-    return price_rub
-
+def convert_currency(amount, from_currency, to_currency):
+    if from_currency == to_currency:
+        return amount
+    try:
+        return round(c.convert(amount, from_currency.upper(), to_currency.upper()), 2)
+    except Exception as e:
+        logging.error(f"Ошибка конвертации валюты: {e}")
+        return amount
 def get_notification_preference(user_id):
 
     try:
@@ -164,6 +166,44 @@ def get_user(user_id):
     except sqlite3.Error as e:
         logging.error(f"Ошибка при получении пользователя: {e}")
         return None
+
+def load_localization():
+    with open("texts.json", "r", encoding="utf-8") as file:
+        return json.load(file)
+
+LOCALIZATION = load_localization()
+
+import sqlite3
+
+
+def get_user_language(user_id):
+    conn = sqlite3.connect("users.db")
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
+    result = cursor.fetchone()
+
+    conn.close()
+
+    return result[0] if result else "ru"
+
+
+def get_text(user_id, key, **kwargs):
+    user_language = get_user_language(user_id)
+    keys = key.split(".")
+
+    text = LOCALIZATION.get(user_language, LOCALIZATION["ru"])
+
+    for k in keys:
+        if isinstance(text, dict):
+            text = text.get(k, key)
+        else:
+            return key
+
+    if isinstance(text, str):
+        return text.format(**kwargs)
+    return key
+
 
 @dp.message(Command('send_message'))
 async def send_message_command(message: types.Message):
@@ -232,13 +272,16 @@ def update_user(user_id, language=None, currency=None):
     except sqlite3.Error as e:
         logging.error(f"Ошибка при обновлении пользователя: {e}")
 
-def update_balance(user_id, amount):
+def update_balance(user_id, amount, currency="rub"):
     try:
-        cursor.execute('UPDATE users SET balance = ? WHERE user_id = ?', (amount, int(user_id)))
+        if currency != "rub":
+            amount = convert_currency(amount, currency.upper(), 'RUB')
+        cursor.execute('UPDATE users SET balance = balance + ? WHERE user_id = ?', (amount, user_id))
         conn.commit()
+        return True
     except sqlite3.Error as e:
-        logging.error(f"Ошибка при изменении баланса: {e}")
-
+        logging.error(f"Ошибка при обновлении баланса: {e}")
+        return False
 def activate_subscription(user_id, duration_days=30):
     try:
         expiry_date = (datetime.now() + timedelta(days=duration_days)).isoformat()
@@ -337,15 +380,23 @@ currency_keyboard = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-main_menu_keyboard = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="🛒 Продать аккаунты"), KeyboardButton(text="💼 Профиль"), KeyboardButton(text="📈 Цены")],
-        [KeyboardButton(text="💬 Поддержка"), KeyboardButton(text="🔌 API"),
-         KeyboardButton(text="🤝 Сотрудничество и Реферальные программы")],
-        [KeyboardButton(text="📖 Условия работы", callback_data="terms_of_service"   ), KeyboardButton(text="💞 Отзывы")]
-    ],
-    resize_keyboard=True
-)
+def get_main_menu_keyboard(user_id):
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=get_text(user_id, "buttons.sell_accounts")),
+             KeyboardButton(text=get_text(user_id, "buttons.profile")),
+             KeyboardButton(text=get_text(user_id, "buttons.prices"))],
+
+            [KeyboardButton(text=get_text(user_id, "buttons.support")),
+             KeyboardButton(text=get_text(user_id, "buttons.api")),
+             KeyboardButton(text=get_text(user_id, "buttons.partnership"))],
+
+            [KeyboardButton(text=get_text(user_id, "buttons.terms")),
+             KeyboardButton(text=get_text(user_id, "buttons.reviews"))]
+        ],
+        resize_keyboard=True
+    )
+
 
 admin_keyboard = ReplyKeyboardMarkup(
     keyboard=[
@@ -362,6 +413,84 @@ admin_keyboard = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
+def update_user_balance(user_id: int, amount: float):
+    user = get_user(user_id)
+    if not user:
+        return False
+    new_balance = max(0, user.get("balance", 0) + amount)
+    update_balance(user_id, new_balance)
+    return True
+
+
+async def send_rejection_notification(user_id: int, amount: float):
+    text = f"❌ Ваш запрос на вывод {amount} USD был отклонён."
+    await bot.send_message(user_id, text)
+
+def get_admin_approval_keyboard(user_id, amount):
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"approve_{user_id}_{amount}")],
+        [InlineKeyboardButton(text="❌ Отклонить", callback_data=f"reject_{user_id}_{amount}")]
+    ])
+@dp.message(Command('approve_withdrawal'))
+async def approve_withdrawal(message: types.Message):
+    if not is_admin(message.from_user.id):
+        await message.answer("❌ У вас нет прав для этой команды.")
+        return
+
+    try:
+        args = message.text.split()
+        if len(args) < 3:
+            raise ValueError("Недостаточно аргументов")
+
+        user_id = int(args[1])
+        amount = float(args[2])
+
+        user = get_user(user_id)
+        if not user:
+            await message.answer("❌ Пользователь не найден.")
+            return
+
+        currency = user.get("currency", "rub")
+        await send_withdrawal_notification(user_id, amount, currency)
+        await message.answer(f"✅ Уведомление пользователю {user_id} отправлено.")
+
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {e}")
+
+@dp.callback_query(lambda call: call.data.startswith("approve_"))
+async def confirm_withdrawal(call: types.CallbackQuery):
+    if not is_admin(call.from_user.id):
+        await call.answer("❌ У вас нет прав.", show_alert=True)
+        return
+
+    _, user_id, amount = call.data.split("_")
+    user_id = int(user_id)
+    amount = float(amount)
+
+    user = get_user(user_id)
+    if not user:
+        await call.answer("❌ Пользователь не найден.", show_alert=True)
+        return
+
+    update_user_balance(user_id, -amount)
+    await send_withdrawal_notification(user_id, amount, user.get("currency", "USD"))
+
+    await call.message.edit_text(f"✅ Вывод {amount} {user.get('currency', 'USD')} подтверждён!")
+    await call.answer("✅ Вывод подтверждён.", show_alert=True)
+
+@dp.callback_query(lambda call: call.data.startswith("reject_"))
+async def reject_withdrawal(call: types.CallbackQuery):
+    if not is_admin(call.from_user.id):
+        await call.answer("❌ У вас нет прав.", show_alert=True)
+        return
+
+    _, user_id, amount = call.data.split("_")
+    user_id = int(user_id)
+    amount = float(amount)
+
+    await send_rejection_notification(user_id, amount)
+    await call.message.edit_text(f"❌ Вывод {amount} отклонён.")
+    await call.answer("🚫 Вывод отклонён.", show_alert=True)
 @dp.message(lambda message: message.text == "📨 Отправить сообщение")
 async def send_message_admin(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
@@ -571,18 +700,14 @@ def create_prices_keyboard(active_category=None):
 
     return keyboard
 
-def get_text(user_id, key, **kwargs):
-    user = get_user(user_id)
-    language = user.get("language", "en") if user else "en"
-    text = texts.get(language, {}).get(key, f"Text not found for key: {key}")
-    return text.format(**kwargs)
+
 @dp.message(Command('start'))
 async def start_command(message: types.Message):
     user_id = message.from_user.id
     user = get_user(user_id)
 
     if user and user.get("language"):
-        await message.answer("👋", reply_markup=main_menu_keyboard)
+        await message.answer("👋", reply_markup=get_main_menu_keyboard(user_id))
     else:
         await message.answer(
             "Welcome! Please select your preferred language.\nПожалуйста, выберите язык.",
@@ -726,7 +851,7 @@ async def back_to_main_menu(message: types.Message):
         await message.answer("У вас нет доступа к этой команде.")
         return
 
-    await message.answer("Возврат в главное меню.", reply_markup=main_menu_keyboard)
+    await message.answer("Возврат в главное меню.", reply_markup=get_main_menu_keyboard(user_id))
 
 def create_agreement_keyboard():
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -734,40 +859,41 @@ def create_agreement_keyboard():
     ])
     return keyboard
 
-with open("texts.json", "r", encoding="utf-8") as f:
-    texts = json.load(f)
-
-
 @dp.message(lambda message: message.text == "English 🇬🇧")
 async def language_english(message: types.Message):
     user_id = message.from_user.id
     update_user(user_id, language="en")
-    await message.answer(get_text(user_id, "language_changed", language="English"), reply_markup=main_menu_keyboard)
+    await message.answer(get_text(user_id, "language_changed"), reply_markup=get_main_menu_keyboard(user_id))
+
 
 @dp.message(lambda message: message.text == "Русский 🇷🇺")
 async def language_russian(message: types.Message):
     user_id = message.from_user.id
     update_user(user_id, language="ru")
-    await message.answer(get_text(user_id, "language_changed", language="Русский"), reply_markup=main_menu_keyboard)
+    await message.answer(get_text(user_id, "language_changed"),
+                         reply_markup=get_main_menu_keyboard(user_id))
 
 
 @dp.message(lambda message: message.text == "USD 🇺🇸")
 async def currency_usd(message: types.Message):
     user_id = message.from_user.id
     update_user(user_id, currency="usd")
-    await message.answer("You selected USD 🇺🇸.", reply_markup=main_menu_keyboard)
+    await message.answer(get_text(user_id, "currency_selected"),
+                         reply_markup=get_main_menu_keyboard(user_id))
+
     await message.answer(
-        "📖 Terms of Service: [read](https://teletype.in/@cjsdkncvkjdsnkvcds/4O_vM0eBTAK).\n\n"
-        "Please confirm that you agree to the terms of service:",
+        get_text(user_id, "terms.message"),
         parse_mode="Markdown",
         reply_markup=create_agreement_keyboard()
     )
+
 
 @dp.message(lambda message: message.text == "Рубли 🇷🇺")
 async def currency_rub(message: types.Message):
     user_id = message.from_user.id
     update_user(user_id, currency="rub")
-    await message.answer("Вы выбрали рубли 🇷🇺.", reply_markup=main_menu_keyboard)
+    await message.answer(get_text(user_id, "currency_selected"),
+                         reply_markup=get_main_menu_keyboard(user_id))
 
 def load_prices_from_json(file_name):
     try:
@@ -1067,8 +1193,8 @@ async def profile(message: types.Message):
     currency = user.get("currency", "rub")
     currency_symbol = "USD" if currency == "usd" else "RUB"
 
-    balance_converted = convert_currency(user['balance'], currency)
-    earned_converted = convert_currency(user['sold_accounts'], currency)
+    balance_converted = convert_currency(user['balance'], 'RUB', 'USD')
+    earned_converted = convert_currency(user['sold_accounts'], 'RUB', 'USD')
 
     text = f"""
 <b>{get_text(user_id, "profile_title")}</b>
@@ -1097,22 +1223,6 @@ async def profile(message: types.Message):
 
     await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
 
-def create_stats_keyboard(active_button=None):
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📊 За 30 дней", callback_data="30_days"),
-         InlineKeyboardButton(text="📈 За всё время", callback_data="all_time")],
-        [InlineKeyboardButton(text="💸 Вывод средств", callback_data="withdraw_funds")],
-        [InlineKeyboardButton(text="📂 Мои аккаунты", callback_data="my_accounts"),
-         InlineKeyboardButton(text="Seller+", callback_data="seller")],
-        [InlineKeyboardButton(text="⚙️ Настройки", callback_data="settings")]
-    ])
-
-    for row in keyboard.inline_keyboard:
-        for button in row:
-            if button.callback_data == active_button:
-                button.text = f"• {button.text} •"
-
-    return keyboard
 
 
 @dp.message(Command('activate_subscription'))
@@ -1131,17 +1241,43 @@ async def check_subscription_command(message: types.Message):
     else:
         await message.answer("Ваша подписка неактивна.")
 
+def create_stats_keyboard(user_id, active_button=None):
+        user = get_user(user_id)
+        if not user:
+            add_user(user_id)
+            user = get_user(user_id)
+        if not user:
+            return None
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=get_text(user_id, "last_30_days"), callback_data="30_days"),
+             InlineKeyboardButton(text=get_text(user_id, "all_time"), callback_data="all_time")],
+            [InlineKeyboardButton(text=get_text(user_id, "withdraw_funds"), callback_data="withdraw_funds")],
+            [InlineKeyboardButton(text=get_text(user_id, "my_accounts"), callback_data="my_accounts"),
+             InlineKeyboardButton(text=get_text(user_id, "seller_plus"), callback_data="seller")],
+            [InlineKeyboardButton(text=get_text(user_id, "settings"), callback_data="settings")]
+        ])
+
+        for row in keyboard.inline_keyboard:
+            for button in row:
+                if button.callback_data == active_button:
+                    button.text = f"• {button.text} •"
+
+        return keyboard
 @dp.callback_query(lambda call: call.data == "30_days")
 async def handle_30_days(call: types.CallbackQuery):
     await call.answer("Вы выбрали 30 дней.")
-    keyboard = create_stats_keyboard(active_button="30_days")
+    user_id = call.from_user.id
+    keyboard = create_stats_keyboard(user_id, active_button="30_days")
     await call.message.edit_reply_markup(reply_markup=keyboard)
 
 @dp.callback_query(lambda call: call.data == "all_time")
 async def handle_all_time(call: types.CallbackQuery):
     await call.answer("Вы выбрали всё время.")
-    keyboard = create_stats_keyboard(active_button="all_time")
+    user_id = call.from_user.id
+    keyboard = create_stats_keyboard(user_id, active_button="all_time")
     await call.message.edit_reply_markup(reply_markup=keyboard)
+
 
 async def send_long_message(chat_id, text):
     while len(text) > 0:
@@ -1186,22 +1322,116 @@ def create_withdraw_keyboard():
 @dp.callback_query(lambda call: call.data == "withdraw_funds")
 async def handle_withdraw_funds(call: types.CallbackQuery):
     user_id = call.from_user.id
+    user = get_user(user_id)
+
+    if not user:
+        add_user(user_id)
+        user = get_user(user_id)
+
+    wallets = get_wallets(user_id)
+    balance = user.get("balance", 0)
+    currency = user.get("currency", "rub")
+
+    min_withdraw_rub = 50
+    exchange_rate = 90
+    min_withdraw = round(min_withdraw_rub / exchange_rate, 2) if currency == "usd" else min_withdraw_rub
+    currency_symbol = "USD" if currency == "usd" else "RUB"
+
+    text = f"""
+💸 <b>{get_text(user_id, "withdraw_funds")}</b>
+
+{get_text(user_id, "min_withdraw")}: <b>{min_withdraw} {currency_symbol}</b>
+{get_text(user_id, "your_balance")}: <b>{balance} {currency_symbol}</b>
+
+🔗 <b>{get_text(user_id, "linked_wallets")}</b>
+{get_text(user_id, "no_wallets") if not wallets else ""}
+"""
+
+    if wallets:
+        text += f"""<b>• {get_text(user_id, "cryptobot_id")}:</b> {wallets.get("cryptobot_id", get_text(user_id, "not_linked"))}
+<b>• {get_text(user_id, "lzt_profile")}:</b> {wallets.get("lzt_link", get_text(user_id, "not_linked"))}
+"""
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=get_text(user_id, "withdraw_history_btn"), callback_data="withdraw_history")],
+        [InlineKeyboardButton(text=get_text(user_id, "withdraw_money_btn"), callback_data="confirm_withdraw")],
+        [InlineKeyboardButton(text=get_text(user_id, "change_wallets_btn"), callback_data="change_wallets")],
+        [InlineKeyboardButton(text=get_text(user_id, "back_to_profile_btn"), callback_data="back_to_profile")]
+    ])
+
+    await call.message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
+
+
+@dp.callback_query(lambda call: call.data == "withdraw_money_btn")
+async def handle_withdraw_request(call: types.CallbackQuery):
+    user_id = call.from_user.id
+    user = get_user(user_id)
+
+    if not user:
+        await call.answer(get_text(user_id, "user_not_found"))
+        return
+
+    balance = user.get("balance", 0)
+    currency = user.get("currency", "usd")
+
+    min_withdraw_rub = 50
+    min_withdraw_usd = round(c.convert(min_withdraw_rub, 'RUB', 'USD'), 2)
+
+    min_withdraw = min_withdraw_usd if currency == "usd" else min_withdraw_rub
+    currency_symbol = "USD" if currency == "usd" else "RUB"
+
     wallets = get_wallets(user_id)
 
     if not wallets or (not wallets.get("cryptobot_id") and not wallets.get("lzt_link")):
-        await call.answer("У вас нет привязанных кошельков.")
-        await call.message.edit_text("У вас нет привязанных кошельков.",
-                                     reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                                         [InlineKeyboardButton(text="OK", callback_data="back_to_profile")]
-                                     ]))
-    else:
-        text = f"""<b>💸 Ваши привязанные кошельки:</b>
+        await call.message.edit_text(get_text(user_id, "no_linked_wallets"))
+        return
 
-<b>Cryptobot ID:</b> {wallets.get("cryptobot_id", "Не привязан")}
-<b>LZT Профиль:</b> {wallets.get("lzt_link", "Не привязан")}
+    await call.message.answer(get_text(user_id, "enter_withdraw_amount"))
 
-Вы можете подтвердить вывод средств."""
-        await call.message.edit_text(text, parse_mode="HTML", reply_markup=create_withdraw_keyboard())
+    @dp.message()
+    async def process_withdraw_amount(message: types.Message):
+        try:
+            amount = float(message.text)
+        except ValueError:
+            await message.answer(get_text(user_id, "invalid_amount"))
+            return
+
+        if amount < min_withdraw:
+            await message.answer(
+                f"❌ {get_text(user_id, 'min_withdrawal')}: {min_withdraw} {currency_symbol}."
+            )
+            return
+
+        if amount > balance:
+            await message.answer(
+                get_text(user_id, "insufficient_funds").format(balance=balance, amount=amount)
+            )
+            return
+
+        admin_text = f"""
+📩 <b>{get_text(user_id, 'new_withdraw_request')}</b>
+
+👤 <b>{get_text(user_id, 'user')}:</b> {user_id}
+🔗 <b>{get_text(user_id, 'profile')}:</b> <a href="https://t.me/user?id={user_id}">Открыть</a>
+💰 <b>{get_text(user_id, 'amount')}:</b> {amount} {currency_symbol}
+
+🌐 <b>{get_text(user_id, 'wallets')}:</b>
+🔹 Cryptobot ID: {wallets.get("cryptobot_id", "None")}
+🔷 LZT {get_text(user_id, 'profile')}: {wallets.get("lzt_link", "None")}
+
+⚠️ <b>{get_text(user_id, 'awaiting_admin_approval')}</b>
+"""
+        admin_chat_id = 525127130
+        await bot.send_message(admin_chat_id, admin_text, parse_mode="HTML")
+
+        await message.answer(get_text(user_id, "withdraw_request_sent"))
+
+        update_user(user_id, balance=balance - amount)
+
+        await bot.send_message(
+            admin_chat_id,
+            f"💸 {get_text(user_id, 'withdraw_request_from')} {user_id} на сумму {amount} {currency_symbol}",
+        )
 
 
 @dp.callback_query(lambda call: call.data == "confirm_withdraw")
@@ -1213,70 +1443,85 @@ async def handle_confirm_withdraw(call: types.CallbackQuery, state: FSMContext):
 def get_profile_link(user_id):
     return f"https://t.me/user?id={user_id}"
 
+
 @dp.message(WithdrawStates.waiting_for_amount)
 async def process_withdraw_amount(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     try:
-        amount = int(message.text.strip())
+        amount = float(message.text.strip())
         if amount <= 0:
             raise ValueError("Сумма должна быть больше 0.")
 
         user = get_user(user_id)
-        wallets = get_wallets(user_id)
-
-        if not wallets or (not wallets.get("cryptobot_id") and not wallets.get("lzt_link")):
-            await message.answer("❌ У вас нет привязанных кошельков. Пожалуйста, добавьте кошелек перед выводом.")
+        if not user:
+            await message.answer("❌ Пользователь не найден.")
             await state.clear()
             return
 
-        withdraw_text = f"""
+        currency = user.get("currency", "rub")
+        min_withdraw_rub = 50
+        min_withdraw = convert_currency(min_withdraw_rub, 'RUB', currency.upper())
+
+        if amount < min_withdraw:
+            await message.answer(f"❌ Минимальная сумма вывода: {min_withdraw} {currency.upper()}")
+            return
+
+        balance = user.get("balance", 0)
+        if amount > balance:
+            await message.answer(f"❌ Недостаточно средств. Ваш баланс: {balance} {currency.upper()}")
+            return
+
+        wallets = get_wallets(user_id)
+        if not wallets or (not wallets.get("cryptobot_id") and not wallets.get("lzt_link")):
+            await message.answer("❌ У вас нет привязанных кошельков.")
+            await state.clear()
+            return
+
+        amount_rub = convert_currency(amount, currency.upper(), 'RUB') if currency != "rub" else amount
+
+        update_balance(user_id, -amount_rub)
+
+        admin_text = f"""
 📩 <b>Новая заявка на вывод средств</b>
 
 👤 <b>Пользователь:</b> <code>{user_id}</code>
-🆔 <b>Профиль:</b> {get_profile_link(user_id)}
-💰 <b>Сумма:</b> {amount} RUB
-
+💰 <b>Сумма:</b> {amount} {currency.upper()} ({amount_rub} RUB)
 🪙 <b>Кошельки:</b>
 🔹 Cryptobot ID: {wallets.get("cryptobot_id", "❌ Не указан")}
 🔹 LZT Профиль: {wallets.get("lzt_link", "❌ Не указан")}
-
-🔔 <b>Ожидает подтверждения администратора.</b>
 """
-
         admins = get_admins()
-
         for admin_id in admins:
-            await bot.send_message(admin_id, withdraw_text, parse_mode="HTML")
+            try:
+                await bot.send_message(admin_id, admin_text, parse_mode="HTML")
+            except Exception as e:
+                logging.error(f"Не удалось отправить уведомление админу {admin_id}: {e}")
 
-        await message.answer("✅ Ваша заявка на вывод отправлена. Ожидайте подтверждения.")
+        await message.answer(f"✅ Ваша заявка на вывод {amount} {currency.upper()} отправлена.")
         await state.clear()
+
     except ValueError:
         await message.answer("❌ Некорректная сумма. Введите число.")
 
-@dp.message(WithdrawStates.waiting_for_amount)
-async def process_withdraw_amount(message: types.Message, state: FSMContext):
-    user_id = message.from_user.id
+async def send_withdrawal_notification(user_id: int, amount: float, currency: str):
+    user = get_user(user_id)
+    if not user:
+        return
+
+    notification_pref = user.get("notification_preference", "all")
+    if notification_pref == "none":
+        return
+
+    text = f"""
+💸 <b>Уведомление о выводе средств</b>
+
+✅ Ваша заявка на вывод {amount} {currency.upper()} была обработана.
+💰 Новый баланс: {user['balance']} {currency.upper()}
+"""
     try:
-        amount = int(message.text.strip())
-        if amount <= 0:
-            raise ValueError("Сумма должна быть больше 0.")
-
-        admin_text = f"""📩 <b>Новая заявка на вывод</b>
-
-👤 Пользователь: {user_id}
-💰 Сумма: {amount} RUB
-
-🔔 Ожидает подтверждения администратора."""
-        admins = get_admins()
-        for admin_id in admins:
-            await bot.send_message(admin_id, admin_text, parse_mode="HTML")
-
-        await message.answer("✅ Ваша заявка на вывод отправлена администратору.")
-        await state.clear()
-    except ValueError:
-        await message.answer("❌ Некорректная сумма. Введите число.")
-
-
+        await bot.send_message(user_id, text, parse_mode="HTML")
+    except Exception as e:
+        logging.error(f"Не удалось отправить уведомление пользователю {user_id}: {e}")
 @dp.callback_query(lambda call: call.data == "back_to_profile")
 async def handle_back_to_profile(call: types.CallbackQuery):
     user_id = call.from_user.id
@@ -1317,12 +1562,12 @@ async def handle_back_to_profile(call: types.CallbackQuery):
 """
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📊 За 30 дней", callback_data="30_days"),
-         InlineKeyboardButton(text="📈 За всё время", callback_data="all_time")],
-        [InlineKeyboardButton(text="💸 Вывод средств", callback_data="withdraw_funds")],
-        [InlineKeyboardButton(text="📂 Мои аккаунты", callback_data="my_accounts"),
+        [InlineKeyboardButton(text=get_text(user_id, "last_30_days"), callback_data="30_days"),
+         InlineKeyboardButton(text=get_text(user_id, "all_time"), callback_data="all_time")],
+        [InlineKeyboardButton(text=get_text(user_id, "withdraw_funds"), callback_data="withdraw_funds")],
+        [InlineKeyboardButton(text=get_text(user_id, "my_accounts"), callback_data="my_accounts"),
          InlineKeyboardButton(text="Seller+", callback_data="seller")],
-        [InlineKeyboardButton(text="⚙️ Настройки", callback_data="settings")]
+        [InlineKeyboardButton(text=get_text(user_id, "settings"), callback_data="settings")]
     ])
 
     await call.message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
