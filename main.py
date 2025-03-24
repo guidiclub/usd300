@@ -1,4 +1,5 @@
 import logging
+import shutil
 import json
 import phonenumbers
 from aiogram import Router
@@ -32,7 +33,6 @@ bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
 router = Router()
 dp.include_router(router)
-ADMIN_IDS = [525127130]
 conn = sqlite3.connect('users.db', check_same_thread=False)
 cursor = conn.cursor()
 c = CurrencyConverter()
@@ -52,10 +52,24 @@ CREATE TABLE IF NOT EXISTS users (
     notification_preference TEXT,
     cryptobot_id TEXT,
     lzt_link TEXT,
-    agreed_to_terms INTEGER DEFAULT 0
+    agreed_to_terms INTEGER DEFAULT 0,
+    is_admin INTEGER DEFAULT 0
 )
 ''')
 conn.commit()
+
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS accounts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    session_file TEXT NOT NULL,
+    json_file TEXT NOT NULL,
+    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+''')
+
+conn.commit()
+
 
 cursor.execute("PRAGMA table_info(users)")
 columns = cursor.fetchall()
@@ -68,6 +82,10 @@ class AdminStates(StatesGroup):
     WAITING_FOR_COUNTRY_CODE_AND_PRICE = State()
     WAITING_FOR_USER_ID_AND_MESSAGE = State()
     WAITING_FOR_ANNOUNCEMENT = State()
+    WAITING_FOR_ADMIN_ID = State()
+
+class AdminManagementStates(StatesGroup):
+    WAITING_FOR_ADMIN_ID = State()
 
 class WalletStates(StatesGroup):
     waiting_for_cryptobot_id = State()
@@ -75,7 +93,34 @@ class WalletStates(StatesGroup):
     waiting_for_profile_name = State()
 
 def is_admin(user_id):
-    return user_id in ADMIN_IDS
+    cursor.execute('SELECT is_admin FROM users WHERE user_id = ?', (user_id,))
+    result = cursor.fetchone()
+    return result and result[0] == 1
+
+def add_admin(user_id):
+    try:
+        cursor.execute('UPDATE users SET is_admin = 1 WHERE user_id = ?', (user_id,))
+        conn.commit()
+        logging.info(f"✅ Пользователь {user_id} добавлен как админ.")
+    except sqlite3.Error as e:
+        logging.error(f"❌ Ошибка при добавлении админа: {e}")
+
+def remove_admin(user_id):
+    try:
+        cursor.execute('UPDATE users SET is_admin = 0 WHERE user_id = ?', (user_id,))
+        conn.commit()
+        logging.info(f"❌ Пользователь {user_id} удален из админов.")
+    except sqlite3.Error as e:
+        logging.error(f"❌ Ошибка при удалении админа: {e}")
+
+def get_admins():
+    try:
+        cursor.execute('SELECT user_id FROM users WHERE is_admin = 1')
+        admins = cursor.fetchall()
+        return [admin[0] for admin in admins]
+    except sqlite3.Error as e:
+        logging.error(f"Ошибка при получении списка админов: {e}")
+        return []
 
 def convert_currency(price_rub, currency):
 
@@ -111,7 +156,9 @@ def get_user(user_id):
                 "subscription_expiry": result[7],
                 "quantity": result[8],
                 "sold_accounts": result[9],
-                "agreed_to_terms": result[10]
+                "agreed_to_terms": result[10],
+                "is_admin": result[11]
+
             }
         return None
     except sqlite3.Error as e:
@@ -295,7 +342,7 @@ main_menu_keyboard = ReplyKeyboardMarkup(
         [KeyboardButton(text="🛒 Продать аккаунты"), KeyboardButton(text="💼 Профиль"), KeyboardButton(text="📈 Цены")],
         [KeyboardButton(text="💬 Поддержка"), KeyboardButton(text="🔌 API"),
          KeyboardButton(text="🤝 Сотрудничество и Реферальные программы")],
-        [KeyboardButton(text="📖 Условия работы"), KeyboardButton(text="💞 Отзывы")]
+        [KeyboardButton(text="📖 Условия работы", callback_data="terms_of_service"   ), KeyboardButton(text="💞 Отзывы")]
     ],
     resize_keyboard=True
 )
@@ -309,10 +356,12 @@ admin_keyboard = ReplyKeyboardMarkup(
         [KeyboardButton(text="💵 Изменить цены")],
         [KeyboardButton(text="📨 Отправить сообщение")],
         [KeyboardButton(text="📢 Сделать объявление")],
+        [KeyboardButton(text="➕ Добавить админа"), KeyboardButton(text="➖ Удалить админа")],
         [KeyboardButton(text="🔙 В главное меню")]
     ],
     resize_keyboard=True
 )
+
 @dp.message(lambda message: message.text == "📨 Отправить сообщение")
 async def send_message_admin(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
@@ -374,6 +423,52 @@ async def process_announcement(message: types.Message, state: FSMContext):
         await message.answer(f"Ошибка: {e}")
     finally:
         await state.clear()
+
+@dp.message(lambda message: message.text == "➕ Добавить админа")
+async def add_admin_prompt(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+
+    if not is_admin(user_id):
+        await message.answer("У вас нет доступа к этой команде.")
+        return
+
+    await message.answer("Введите ID пользователя, которого хотите сделать админом:")
+    await state.set_state(AdminManagementStates.WAITING_FOR_ADMIN_ID)
+
+@dp.message(AdminManagementStates.WAITING_FOR_ADMIN_ID)
+async def process_add_admin(message: types.Message, state: FSMContext):
+    try:
+        new_admin_id = int(message.text)
+        add_admin(new_admin_id)
+        await message.answer(f"✅ Пользователь {new_admin_id} теперь администратор.")
+    except ValueError:
+        await message.answer("❌ Некорректный ID. Введите число.")
+    finally:
+        await state.clear()
+
+
+@dp.message(lambda message: message.text == "➖ Удалить админа")
+async def remove_admin_prompt(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+
+    if not is_admin(user_id):
+        await message.answer("У вас нет доступа к этой команде.")
+        return
+
+    await message.answer("Введите ID администратора, которого хотите удалить:")
+    await state.set_state(AdminManagementStates.WAITING_FOR_ADMIN_ID)
+
+@dp.message(AdminManagementStates.WAITING_FOR_ADMIN_ID)
+async def process_remove_admin(message: types.Message, state: FSMContext):
+    try:
+        admin_id = int(message.text)
+        remove_admin(admin_id)
+        await message.answer(f"❌ Пользователь {admin_id} больше не администратор.")
+    except ValueError:
+        await message.answer("❌ Некорректный ID. Введите число.")
+    finally:
+        await state.clear()
+
 @dp.message(lambda message: message.text == "📊 Пользователи")
 async def show_users_statistics(message: types.Message):
     user_id = message.from_user.id
@@ -476,11 +571,17 @@ def create_prices_keyboard(active_category=None):
 
     return keyboard
 
+def get_text(user_id, key, **kwargs):
+    user = get_user(user_id)
+    language = user.get("language", "en") if user else "en"
+    text = texts.get(language, {}).get(key, f"Text not found for key: {key}")
+    return text.format(**kwargs)
 @dp.message(Command('start'))
 async def start_command(message: types.Message):
     user_id = message.from_user.id
     user = get_user(user_id)
-    if user and user.get("currency"):
+
+    if user and user.get("language"):
         await message.answer("👋", reply_markup=main_menu_keyboard)
     else:
         await message.answer(
@@ -633,15 +734,21 @@ def create_agreement_keyboard():
     ])
     return keyboard
 
-@dp.message(lambda message: message.text == "Русский 🇷🇺")
-async def language_russian(message: types.Message):
-    user_id = message.from_user.id
-    update_user(user_id, language="ru")
+with open("texts.json", "r", encoding="utf-8") as f:
+    texts = json.load(f)
+
 
 @dp.message(lambda message: message.text == "English 🇬🇧")
 async def language_english(message: types.Message):
     user_id = message.from_user.id
     update_user(user_id, language="en")
+    await message.answer(get_text(user_id, "language_changed", language="English"), reply_markup=main_menu_keyboard)
+
+@dp.message(lambda message: message.text == "Русский 🇷🇺")
+async def language_russian(message: types.Message):
+    user_id = message.from_user.id
+    update_user(user_id, language="ru")
+    await message.answer(get_text(user_id, "language_changed", language="Русский"), reply_markup=main_menu_keyboard)
 
 
 @dp.message(lambda message: message.text == "USD 🇺🇸")
@@ -727,9 +834,21 @@ def get_price_for_country(country, prices_data):
                 return country_data.get("price")
 
     return None
-async def check_sessions(session_files, json_files, extracted_dir):
-    total_price = 0
-    valid_accounts = []
+
+
+def get_user_accounts(user_id):
+    conn = sqlite3.connect("users.db")
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT account_data, added_at FROM accounts WHERE user_id = ?", (user_id,))
+    accounts = cursor.fetchall()
+
+    conn.close()
+    return accounts
+
+
+async def check_sessions(session_files, json_files, extracted_dir, user_id):
+    total_valid = 0
 
     for session_file, json_file in zip(session_files, json_files):
         session_name = os.path.splitext(session_file)[0]
@@ -744,38 +863,39 @@ async def check_sessions(session_files, json_files, extracted_dir):
             api_hash = json_data.get("app_hash")
             phone = json_data.get("phone")
             last_connect_date = json_data.get("last_connect_date")
-            is_premium = json_data.get("is_premium", False)
+            is_premium = int(json_data.get("is_premium", False))
 
             if not api_id or not api_hash:
-                print(f"❌ Неверные данные в JSON {json_file}, пропускаем")
+                print(f"❌ Ошибка в JSON {json_file}, пропускаем")
                 continue
 
-            client = TelegramClient(session_name, api_id, api_hash)
+            client = TelegramClient(session_path, api_id, api_hash)
             await client.connect()
 
             if await client.is_user_authorized():
                 print(f"✅ Сессия {session_name} работает")
-                valid_accounts.append(session_name)
+                add_valid_account(user_id, session_file, json_file, phone, is_premium, last_connect_date)
+                total_valid += 1
             else:
                 print(f"❌ Сессия {session_name} не авторизована, пропускаем")
-                continue
 
             await client.disconnect()
 
         except Exception as e:
-            print(f"❌ Ошибка сессии {session_name}: {e}")
+            print(f"❌ Ошибка с сессией {session_name}: {e}")
             continue
 
         finally:
-            if session_name not in valid_accounts:
+            if session_name not in [acc[0] for acc in get_user_accounts(user_id)]:
                 if os.path.exists(json_path):
                     os.remove(json_path)
                 if os.path.exists(session_path):
                     os.remove(session_path)
 
-        await asyncio.sleep(5)
+        await asyncio.sleep(2)
 
-    return total_price, valid_accounts
+    return total_valid
+
 
 def create_confirmation_keyboard():
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -808,7 +928,18 @@ async def handle_document(message: types.Message):
 
     await process_archive(file_name, message)
 
-import shutil
+def add_valid_account(user_id, session_file, json_file):
+    conn = sqlite3.connect("users.db")
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "INSERT INTO accounts (user_id, session_file, json_file) VALUES (?, ?, ?)",
+        (user_id, session_file, json_file)
+    )
+    conn.commit()
+    conn.close()
+
+    print(f"✅ Добавлен валидный аккаунт: {session_file} / {json_file} для пользователя {user_id}")
 
 async def process_archive(file_name, message):
     user_id = message.from_user.id
@@ -883,25 +1014,28 @@ async def handle_reject_accounts(call: types.CallbackQuery):
     await call.message.edit_text("❌ Аккаунты отклонены.")
 @dp.message(lambda message: message.text == "🛒 Продать аккаунты")
 async def sell_accounts(message: types.Message):
+    user_id = message.from_user.id
+
     markup = InlineKeyboardMarkup(inline_keyboard=[])
     button = InlineKeyboardButton(
-        text="📦Загрузить большой архив",
+        text=get_text(user_id, "upload_large_archive"),
         url="https://bigsize.blitzkrieg.space/big_files/upload-big-file?seller_id=5270&ref_id=FRANCHISE_APP_1"
     )
     markup.inline_keyboard.append([button])
 
     await message.answer(
-        """<b>🛒 Загрузка архива с аккаунтами</b>
+        f"""
+<b>{get_text(user_id, "upload_accounts_title")}</b>
 
-Загрузите архив в формате .ZIP или .RAR
+{get_text(user_id, "upload_archive_description")}
 
-<b>Максимальный размер:</b> 20 MB
+<b>{get_text(user_id, "max_size")}:</b> 20 MB
 
-<b>Форматы:</b> TDATA, SESSION + JSON
+<b>{get_text(user_id, "formats")}:</b> TDATA, SESSION + JSON
 
-📦 <a href="https://bigsize.blitzkrieg.space/big_files/upload-big-file?seller_id=5270&ref_id=FRANCHISE_APP_1">Загрузить большой архив</a>
+📦 <a href="https://bigsize.blitzkrieg.space/big_files/upload-big-file?seller_id=5270&ref_id=FRANCHISE_APP_1">{get_text(user_id, "upload_large_archive")}</a>
 
-📖 <a href="https://teletype.in/@blitzkriegdev/blitzkrieg-faq#vZhK">Требования к аккаунтам</a>
+📖 <a href="https://teletype.in/@blitzkriegdev/blitzkrieg-faq#vZhK">{get_text(user_id, "account_requirements")}</a>
 """,
         parse_mode="HTML",
         reply_markup=markup
@@ -913,19 +1047,22 @@ async def profile(message: types.Message):
     user_id = message.from_user.id
     user = get_user(user_id)
     if not user:
-        await message.answer("Пользователь не найден.")
+        add_user(user_id)
+        user = get_user(user_id)
+    if not user:
+        await message.answer(get_text(user_id, "user_not_found"))
         return
 
     registration_date = user.get("registration_date")
     if registration_date:
         date_obj = datetime.fromisoformat(registration_date)
         days_since_registration = (datetime.now() - date_obj).days
-        formatted_registration = f"{days_since_registration} дней назад"
+        formatted_registration = get_text(user_id, "days_ago", days=days_since_registration)
     else:
-        formatted_registration = "Нет данных"
+        formatted_registration = get_text(user_id, "no_data")
 
     subscription_info = get_subscription_info(user_id)
-    subscription_status = "Есть" if subscription_info["active"] else "Нет"
+    subscription_status = get_text(user_id, "subscription_active") if subscription_info["active"] else get_text(user_id, "subscription_inactive")
 
     currency = user.get("currency", "rub")
     currency_symbol = "USD" if currency == "usd" else "RUB"
@@ -934,28 +1071,28 @@ async def profile(message: types.Message):
     earned_converted = convert_currency(user['sold_accounts'], currency)
 
     text = f"""
-<b>👤 Профиль пользователя</b>
+<b>{get_text(user_id, "profile_title")}</b>
 ━━━━━━━━━━━━━━━━━━
-<b>🆔 ID:</b> <code>{user_id}</code>
+<b>{get_text(user_id, "user_id")}:</b> <code>{user_id}</code>
 
-<b>🏆 Продано аккаунтов:</b> {user['quantity']}
-<b>💸 Заработано:</b> {earned_converted} {currency_symbol}
+<b>{get_text(user_id, "accounts_sold")}:</b> {user['quantity']}
+<b>{get_text(user_id, "earned")}:</b> {earned_converted} {currency_symbol}
 
-<b>💰 Баланс:</b> {balance_converted} {currency_symbol}
+<b>{get_text(user_id, "balance")}:</b> {balance_converted} {currency_symbol}
 
-<b>👑 Seller+ привилегия:</b> {subscription_status}
+<b>{get_text(user_id, "seller_plus_status")}:</b> {subscription_status}
 
-<b>📅 Зарегистрирован:</b> {formatted_registration}
+<b>{get_text(user_id, "registered")}:</b> {formatted_registration}
 ━━━━━━━━━━━━━━━━━━
 """
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📊 За 30 дней", callback_data="30_days"),
-         InlineKeyboardButton(text="📈 За всё время", callback_data="all_time")],
-        [InlineKeyboardButton(text="💸 Вывод средств", callback_data="withdraw")],
-        [InlineKeyboardButton(text="📂 Мои аккаунты", callback_data="my_accounts"),
-         InlineKeyboardButton(text="Seller+", callback_data="seller")],
-        [InlineKeyboardButton(text="⚙️ Настройки", callback_data="settings")]
+        [InlineKeyboardButton(text=get_text(user_id, "last_30_days"), callback_data="30_days"),
+         InlineKeyboardButton(text=get_text(user_id, "all_time"), callback_data="all_time")],
+        [InlineKeyboardButton(text=get_text(user_id, "withdraw_funds"), callback_data="withdraw_funds")],
+        [InlineKeyboardButton(text=get_text(user_id, "my_accounts"), callback_data="my_accounts"),
+         InlineKeyboardButton(text=get_text(user_id, "seller_plus"), callback_data="seller")],
+        [InlineKeyboardButton(text=get_text(user_id, "settings"), callback_data="settings")]
     ])
 
     await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
@@ -964,7 +1101,7 @@ def create_stats_keyboard(active_button=None):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📊 За 30 дней", callback_data="30_days"),
          InlineKeyboardButton(text="📈 За всё время", callback_data="all_time")],
-        [InlineKeyboardButton(text="💸 Вывод средств", callback_data="withdraw")],
+        [InlineKeyboardButton(text="💸 Вывод средств", callback_data="withdraw_funds")],
         [InlineKeyboardButton(text="📂 Мои аккаунты", callback_data="my_accounts"),
          InlineKeyboardButton(text="Seller+", callback_data="seller")],
         [InlineKeyboardButton(text="⚙️ Настройки", callback_data="settings")]
@@ -1035,45 +1172,110 @@ async def handle_seller(call: types.CallbackQuery):
         await call.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
 
 
-@dp.callback_query(lambda call: call.data == "withdraw")
-async def handle_withdraw(call: types.CallbackQuery):
+class WithdrawStates(StatesGroup):
+    waiting_for_amount = State()
 
-    await call.answer("Вывод средств.")
-    withdraw_text = """<b>💸 Вывод средств</b>
 
-Выберите действие:
-"""
-    withdraw_keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📜 История выводов", callback_data="withdraw_history")],
-        [InlineKeyboardButton(text="💳 Вывести средства", callback_data="withdraw_funds")],
-        [InlineKeyboardButton(text="🔄 Изменить кошельки", callback_data="change_wallets")],
-        [InlineKeyboardButton(text="🔙 Назад в профиль", callback_data="back_to_profile")]
+def create_withdraw_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Подтвердить вывод средств", callback_data="confirm_withdraw")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_profile")]
     ])
-    await call.message.edit_text(withdraw_text, parse_mode="HTML", reply_markup=withdraw_keyboard)
+
 
 @dp.callback_query(lambda call: call.data == "withdraw_funds")
 async def handle_withdraw_funds(call: types.CallbackQuery):
-
     user_id = call.from_user.id
     wallets = get_wallets(user_id)
 
     if not wallets or (not wallets.get("cryptobot_id") and not wallets.get("lzt_link")):
         await call.answer("У вас нет привязанных кошельков.")
-        await call.message.edit_text("У вас нет привязанных кошельков.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="OK", callback_data="back_to_profile")]
-        ]))
+        await call.message.edit_text("У вас нет привязанных кошельков.",
+                                     reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                                         [InlineKeyboardButton(text="OK", callback_data="back_to_profile")]
+                                     ]))
     else:
-        text = """<b>💸 Ваши привязанные кошельки:</b>
+        text = f"""<b>💸 Ваши привязанные кошельки:</b>
 
-<b>Cryptobot ID:</b> {cryptobot_id}
-<b>LZT Профиль:</b> {lzt_link}
-""".format(
-            cryptobot_id=wallets.get("cryptobot_id", "Не привязан"),
-            lzt_link=wallets.get("lzt_link", "Не привязан")
-        )
-        await call.message.edit_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_profile")]
-        ]))
+<b>Cryptobot ID:</b> {wallets.get("cryptobot_id", "Не привязан")}
+<b>LZT Профиль:</b> {wallets.get("lzt_link", "Не привязан")}
+
+Вы можете подтвердить вывод средств."""
+        await call.message.edit_text(text, parse_mode="HTML", reply_markup=create_withdraw_keyboard())
+
+
+@dp.callback_query(lambda call: call.data == "confirm_withdraw")
+async def handle_confirm_withdraw(call: types.CallbackQuery, state: FSMContext):
+    await call.answer("Введите сумму вывода.")
+    await call.message.edit_text("Введите сумму, которую хотите вывести:")
+    await state.set_state(WithdrawStates.waiting_for_amount)
+
+def get_profile_link(user_id):
+    return f"https://t.me/user?id={user_id}"
+
+@dp.message(WithdrawStates.waiting_for_amount)
+async def process_withdraw_amount(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    try:
+        amount = int(message.text.strip())
+        if amount <= 0:
+            raise ValueError("Сумма должна быть больше 0.")
+
+        user = get_user(user_id)
+        wallets = get_wallets(user_id)
+
+        if not wallets or (not wallets.get("cryptobot_id") and not wallets.get("lzt_link")):
+            await message.answer("❌ У вас нет привязанных кошельков. Пожалуйста, добавьте кошелек перед выводом.")
+            await state.clear()
+            return
+
+        withdraw_text = f"""
+📩 <b>Новая заявка на вывод средств</b>
+
+👤 <b>Пользователь:</b> <code>{user_id}</code>
+🆔 <b>Профиль:</b> {get_profile_link(user_id)}
+💰 <b>Сумма:</b> {amount} RUB
+
+🪙 <b>Кошельки:</b>
+🔹 Cryptobot ID: {wallets.get("cryptobot_id", "❌ Не указан")}
+🔹 LZT Профиль: {wallets.get("lzt_link", "❌ Не указан")}
+
+🔔 <b>Ожидает подтверждения администратора.</b>
+"""
+
+        admins = get_admins()
+
+        for admin_id in admins:
+            await bot.send_message(admin_id, withdraw_text, parse_mode="HTML")
+
+        await message.answer("✅ Ваша заявка на вывод отправлена. Ожидайте подтверждения.")
+        await state.clear()
+    except ValueError:
+        await message.answer("❌ Некорректная сумма. Введите число.")
+
+@dp.message(WithdrawStates.waiting_for_amount)
+async def process_withdraw_amount(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    try:
+        amount = int(message.text.strip())
+        if amount <= 0:
+            raise ValueError("Сумма должна быть больше 0.")
+
+        admin_text = f"""📩 <b>Новая заявка на вывод</b>
+
+👤 Пользователь: {user_id}
+💰 Сумма: {amount} RUB
+
+🔔 Ожидает подтверждения администратора."""
+        admins = get_admins()
+        for admin_id in admins:
+            await bot.send_message(admin_id, admin_text, parse_mode="HTML")
+
+        await message.answer("✅ Ваша заявка на вывод отправлена администратору.")
+        await state.clear()
+    except ValueError:
+        await message.answer("❌ Некорректная сумма. Введите число.")
+
 
 @dp.callback_query(lambda call: call.data == "back_to_profile")
 async def handle_back_to_profile(call: types.CallbackQuery):
@@ -1117,7 +1319,7 @@ async def handle_back_to_profile(call: types.CallbackQuery):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📊 За 30 дней", callback_data="30_days"),
          InlineKeyboardButton(text="📈 За всё время", callback_data="all_time")],
-        [InlineKeyboardButton(text="💸 Вывод средств", callback_data="withdraw")],
+        [InlineKeyboardButton(text="💸 Вывод средств", callback_data="withdraw_funds")],
         [InlineKeyboardButton(text="📂 Мои аккаунты", callback_data="my_accounts"),
          InlineKeyboardButton(text="Seller+", callback_data="seller")],
         [InlineKeyboardButton(text="⚙️ Настройки", callback_data="settings")]
@@ -1264,11 +1466,25 @@ async def handle_cancel_operation(call: types.CallbackQuery, state: FSMContext):
     await state.clear()
 
 
-@dp.callback_query(lambda call: call.data == "my_accounts")
-async def handle_my_accounts(call: types.CallbackQuery):
-    await call.answer("Вы выбрали Мои аккаунты.")
-    await call.message.edit_text("Вы выбрали Мои аккаунты.")
+@dp.message(lambda message: message.text == "📂 Мои аккаунты")
+async def show_my_accounts(message: types.Message):
+    user_id = message.from_user.id
+    conn = sqlite3.connect("users.db")
+    cursor = conn.cursor()
 
+    cursor.execute("SELECT session_file, json_file, added_at FROM accounts WHERE user_id = ?", (user_id,))
+    accounts = cursor.fetchall()
+    conn.close()
+
+    if not accounts:
+        await message.answer("❌ У вас нет загруженных аккаунтов.")
+        return
+
+    text = "<b>📂 Ваши аккаунты:</b>\n"
+    for i, (session_file, json_file, added_at) in enumerate(accounts, start=1):
+        text += f"{i}. 🗂 {session_file} / {json_file} (Добавлен: {added_at})\n"
+
+    await message.answer(text, parse_mode="HTML")
 
 
 def create_language_keyboard(active_button=None):
@@ -1290,7 +1506,6 @@ def create_language_keyboard(active_button=None):
 async def handle_set_language(call: types.CallbackQuery):
     user_id = call.from_user.id
     language = call.data.split("_")[-1]
-
     update_user(user_id, language=language)
 
     if language == "ru":
@@ -1673,25 +1888,13 @@ async def handle_price_category(call: types.CallbackQuery, state: FSMContext):
     selected_category = data.get("selected_category", "seller_plus_with_delay")
 
     if call.data == "seller_plus":
-        if "with_delay" in selected_category:
-            selected_category = "seller_plus_with_delay"
-        else:
-            selected_category = "seller_plus_without_delay"
+        selected_category = "seller_plus_with_delay" if "with_delay" in selected_category else "seller_plus_without_delay"
     elif call.data == "standard":
-        if "with_delay" in selected_category:
-            selected_category = "standard_with_delay"
-        else:
-            selected_category = "standard_without_delay"
+        selected_category = "standard_with_delay" if "with_delay" in selected_category else "standard_without_delay"
     elif call.data == "with_delay":
-        if "seller_plus" in selected_category:
-            selected_category = "seller_plus_with_delay"
-        else:
-            selected_category = "standard_with_delay"
+        selected_category = "seller_plus_with_delay" if "seller_plus" in selected_category else "standard_with_delay"
     elif call.data == "without_delay":
-        if "seller_plus" in selected_category:
-            selected_category = "seller_plus_without_delay"
-        else:
-            selected_category = "standard_without_delay"
+        selected_category = "seller_plus_without_delay" if "seller_plus" in selected_category else "standard_without_delay"
 
     await state.update_data(selected_category=selected_category)
 
@@ -1703,16 +1906,17 @@ async def handle_price_category(call: types.CallbackQuery, state: FSMContext):
     prices_data = load_prices_from_json(selected_category, file_name)
 
     if prices_data:
-        response = f"📌 Категория: {prices_data['name']}\n\n"
+        response = f"📌 {get_text(user_id, 'category')}: {prices_data['name']}\n\n"
         for region in prices_data.get("regions", []):
-            response += f"🌍 Регион: {region.get('name')}\n"
+            response += f" {get_text(user_id, 'region')}: {region.get('name')}\n"
             for country in region.get("countries", []):
                 price = country.get('price')
                 price_converted = convert_currency(price, currency)
                 response += f"├─ {country.get('flag')} {country.get('name')} {country.get('phone_code')} • {price_converted} {currency_symbol}\n"
+
         await call.message.answer(response, reply_markup=create_price_keyboard(selected_category))
     else:
-        await call.message.answer("Цены для выбранной категории не найдены.")
+        await call.message.answer(get_text(user_id, "prices_not_found"))
 
     await call.answer()
 
@@ -1722,13 +1926,13 @@ async def show_prices(message: types.Message):
     currency = get_user_currency(user_id)
 
     category = "seller_plus_with_delay"
-    file_name = "seller_plus_with_delay.json"
+    file_name = f"{category}.json"
     prices_data = load_prices_from_json(category, file_name)
 
     if prices_data:
-        response = f"📌 Категория: {prices_data['name']}\n\n"
+        response = f"📌 {get_text(user_id, 'category')}: {prices_data['name']}\n\n"
         for region in prices_data.get("regions", []):
-            response += f"🌍 Регион: {region.get('name')}\n"
+            response += f" {get_text(user_id, 'region')}: {region.get('name')}\n"
             for country in region.get("countries", []):
                 price = country.get('price')
                 price_converted = convert_currency(price, currency)
@@ -1736,12 +1940,12 @@ async def show_prices(message: types.Message):
                 response += f"├─ {country.get('flag')} {country.get('name')} {country.get('phone_code')} • {price_converted} {currency_symbol}\n"
         await message.answer(response, reply_markup=create_price_keyboard(category))
     else:
-        await message.answer("Цены для выбранной категории не найдены.")
-
+        await message.answer(get_text(user_id, "prices_not_found"))
 @dp.callback_query(F.data.in_(["standard_with_delay", "standard_without_delay", "seller_plus_with_delay", "seller_plus_without_delay"]))
 async def handle_price_category(call: types.CallbackQuery):
+    user_id = call.from_user.id
     category = call.data
-    file_name = None
+    file_name = f"{category}.json"
 
     if category == "standard_with_delay":
         file_name = "standard_with_delay.json"
@@ -1757,32 +1961,39 @@ async def handle_price_category(call: types.CallbackQuery):
         return
 
     prices_data = load_prices_from_json(category, file_name)
-
+    user_id = call.from_user.id
     if prices_data:
-        response = f"📌 Категория: {prices_data['name']}\n\n"
+        response = f"📌 {get_text(user_id, 'category')}: {prices_data['name']}\n\n"
         for region in prices_data.get("regions", []):
-            response += f"🌍 Регион: {region.get('name')}\n"
+            response += f" {get_text(user_id, 'region')}: {region.get('name')}\n"
             for country in region.get("countries", []):
                 response += f"├─ {country.get('flag')} {country.get('name')} {country.get('phone_code')} • {country.get('price')}₽\n"
+
         await call.message.answer(response, reply_markup=create_price_keyboard(category))
     else:
-        await call.message.answer("Цены для выбранной категории не найдены.")
+        await call.message.answer(get_text(user_id, "prices_not_found"))
 
     await call.answer()
 
 
 
-@dp.message((lambda message: message.text == "💬 Поддержка"))
+@dp.message(lambda message: message.text == "💬 Поддержка")
 async def support(message: types.Message):
-    await message.answer("📩 Официальная поддержка: [связаться](https://t.me/Blitzkrieg_sup)", parse_mode="Markdown")
+    user_id = message.from_user.id
+    await message.answer(
+        get_text(user_id, "official_support", link="https://t.me/bzskup_support"),
+        parse_mode="Markdown"
+    )
 
 @dp.message(lambda message: message.text == "🔌 API")
 async def api_info(message: types.Message):
-    await message.answer("🔌 API документация доступна на сайте.")
+    user_id = message.from_user.id
+    await message.answer(get_text(user_id, "api_documentation"))
 
 @dp.message(lambda message: message.text == "🤝 Сотрудничество и Реферальные программы")
 async def partnership(message: types.Message):
-    await message.answer("🤝 Информация о сотрудничестве доступна на сайте.")
+    user_id = message.from_user.id
+    await message.answer(get_text(user_id, "partnership_info"))
 
 
 @dp.message(lambda message: message.text == "📖 Условия работы")
@@ -1791,18 +2002,17 @@ async def terms(message: types.Message):
     user = get_user(user_id)
 
     if user and user["agreed_to_terms"] == 1:
-
         await message.answer(
-            "📖 Условия работы: [прочитать](https://teletype.in/@cjsdkncvkjdsnkvcds/4O_vM0eBTAK).",
+            get_text(user_id, "terms_of_service", link="https://teletype.in/@cjsdkncvkjdsnkvcds/4O_vM0eBTAK"),
             parse_mode="Markdown"
         )
     else:
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="✅ Подтвердить", callback_data="agree_terms")]
+            [InlineKeyboardButton(text=get_text(user_id, "agree"), callback_data="agree_terms")]
         ])
         await message.answer(
-            "📖 Условия работы: [прочитать](https://teletype.in/@cjsdkncvkjdsnkvcds/4O_vM0eBTAK).\n\n"
-            "Пожалуйста, подтвердите, что вы согласны с условиями работы сервиса:",
+            f"{get_text(user_id, 'terms_of_service', link='https://teletype.in/@cjsdkncvkjdsnkvcds/4O_vM0eBTAK')}\n\n"
+            f"{get_text(user_id, 'confirm_terms')}",
             parse_mode="Markdown",
             reply_markup=keyboard
         )
@@ -1832,7 +2042,7 @@ async def handle_agree_terms(call: types.CallbackQuery):
         logging.error(f"Ошибка при обновлении согласия с условиями (user_id: {user_id}): {e}")
         await call.answer("❌ Произошла ошибка. Пожалуйста, попробуйте позже.")
 
-@dp.callback_query(lambda message: message.text == "📖 Условия работы")
+@dp.callback_query(lambda call: call.data == "terms_of_service")
 async def handle_agree_terms(call: types.CallbackQuery):
     user_id = call.from_user.id
 
